@@ -1,8 +1,6 @@
 # Mirror's Edge LAN (P2P Multiplayer)
 
-This is Slop.
-
-Mirror's Edge LAN is a fan fork of [btbd/mmultiplayer](https://github.com/btbd/mmultiplayer). It is not affiliated with or endorsed by EA DICE or Electronic Arts. This was tested and made for a Steam copy (`MirrorsEdge.exe` v1.0.1.0).
+Mirror's Edge LAN is a fork of [btbd/mmultiplayer](https://github.com/btbd/mmultiplayer), Only possible thanks to it. It is not affiliated with or endorsed by EA DICE or Electronic Arts. This was tested and made for a Steam copy (`MirrorsEdge.exe` v1.0.1.0).
 
 A project to get Mirror's Edge Multiplayer working **in P2P**, no more server needed.
 
