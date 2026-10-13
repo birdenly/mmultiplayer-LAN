@@ -491,25 +491,7 @@ static void DecompressPacketToPlayer(Client::Player *player,
 }
 
 static bool EnsureClientLevelInitialized() {
-    if (client.Level == "") {
-        const auto world = Engine::GetWorld();
-        if (!world) {
-            printf("client: no world available\n");
-            return false;
-        }
-
-        client.Level =
-            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>().to_bytes(
-                world->GetMapName(false).c_str());
-
-        std::transform(client.Level.begin(), client.Level.end(),
-                       client.Level.begin(), [](char c) { return tolower(c); });
-
-        if (client.Level == "tdmainmenu") {
-            loading = true;
-        }
-    }
-    return true;
+    return !client.Level.empty();
 }
 
 static void RemovePeerById(unsigned int targetId) {
@@ -734,7 +716,8 @@ static void RunP2pSession() {
                     memcpy(player->LastPacket.Bones, defaultBones,
                            sizeof(defaultBones));
 
-                    if (player->Level == client.Level && !loading) {
+                    if (player->Level == client.Level &&
+                        client.Level != "tdmainmenu" && !loading) {
                         Engine::SpawnCharacter(player->Character, player->Actor);
                     } else {
                         player->Actor = nullptr;
@@ -754,7 +737,8 @@ static void RunP2pSession() {
 
                     if (player->Level != peerLevel) {
                         player->Level = peerLevel;
-                        if (player->Level == client.Level) {
+                        if (player->Level == client.Level &&
+                            client.Level != "tdmainmenu") {
                             if (!player->Actor && !loading) {
                                 Engine::SpawnCharacter(player->Character,
                                                        player->Actor);
@@ -769,7 +753,8 @@ static void RunP2pSession() {
 
                     if (player->Character != peerChar) {
                         player->Character = peerChar;
-                        if (!loading && player->Level == client.Level) {
+                        if (!loading && player->Level == client.Level &&
+                            client.Level != "tdmainmenu") {
                             if (player->Actor) {
                                 Engine::Despawn(player->Actor);
                                 player->Actor = nullptr;
@@ -839,6 +824,21 @@ static void ClientListener() {
 }
 
 static void OnTick(float delta) {
+    if (client.Level.empty()) {
+        const auto world = Engine::GetWorld();
+        if (world) {
+            std::string lvl =
+                std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>()
+                    .to_bytes(world->GetMapName(false).c_str());
+            std::transform(lvl.begin(), lvl.end(), lvl.begin(),
+                           [](char c) { return tolower(c); });
+            if (lvl == "tdmainmenu") {
+                loading = true;
+            }
+            client.Level = lvl;
+        }
+    }
+
     static float sum = 0;
     sum += delta;
 

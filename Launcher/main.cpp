@@ -46,8 +46,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, char *, int) {
 
 bool LoadClient(HANDLE process) {
     std::wstring path;
-    if (!GetDllPath(GetProcessId(process), path)) {
-        MessageBox(0, L"Failed to find local Client.dll (or mmultiplayer.dll) next to Launcher.exe", L"Failure", 0);
+    if (!GetDllPath(path)) {
+        MessageBox(0, L"Failed to find Client.dll next to Launcher.exe", L"Failure", 0);
         return false;
     }
 
@@ -121,29 +121,10 @@ bool HasModule(HANDLE process, const wchar_t *module) {
 }
 
 bool HasClientModule(HANDLE process) {
-    const auto snapshot =
-        CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetProcessId(process));
-
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-
-    MODULEENTRY32 entry = {sizeof(entry)};
-    if (Module32First(snapshot, &entry)) {
-        do {
-            if (_wcsnicmp(entry.szModule, L"mmultiplayer", 12) == 0 ||
-                _wcsicmp(entry.szModule, L"Client.dll") == 0) {
-                CloseHandle(snapshot);
-                return true;
-            }
-        } while (Module32Next(snapshot, &entry));
-    }
-
-    CloseHandle(snapshot);
-    return false;
+    return HasModule(process, L"Client.dll") || HasModule(process, L"mmultiplayer.dll");
 }
 
-bool GetDllPath(DWORD pid, std::wstring &path) {
+bool GetDllPath(std::wstring &path) {
     wchar_t exeDir[MAX_PATH] = {0};
     if (!GetModuleFileNameW(nullptr, exeDir, MAX_PATH)) {
         return false;
@@ -156,41 +137,11 @@ bool GetDllPath(DWORD pid, std::wstring &path) {
         std::wstring(exeDir) + L"\\..\\Client\\binary\\Client.dll",
     };
 
-    std::wstring sourceDll;
     for (const auto &candidate : candidates) {
         if (PathFileExistsW(candidate.c_str())) {
-            sourceDll = candidate;
-            break;
-        }
-    }
-
-    wchar_t tempDir[0x200] = {0};
-    if (GetTempPathW(sizeof(tempDir) / sizeof(tempDir[0]), tempDir)) {
-        std::wstring tempDll = std::wstring(tempDir) + L"mmultiplayer.dll";
-        std::wstring pidTempDll =
-            std::wstring(tempDir) + L"mmultiplayer_" + std::to_wstring(pid) + L".dll";
-        if (!sourceDll.empty()) {
-            if (CopyFileW(sourceDll.c_str(), tempDll.c_str(), FALSE)) {
-                path = tempDll;
-                return true;
-            }
-            if (CopyFileW(sourceDll.c_str(), pidTempDll.c_str(), FALSE)) {
-                path = pidTempDll;
-                return true;
-            }
-            if (PathFileExistsW(tempDll.c_str())) {
-                path = tempDll;
-                return true;
-            }
-        } else if (PathFileExistsW(tempDll.c_str())) {
-            path = tempDll;
+            path = candidate;
             return true;
         }
-    }
-
-    if (!sourceDll.empty()) {
-        path = sourceDll;
-        return true;
     }
 
     return false;
@@ -206,8 +157,7 @@ std::vector<DWORD> GetProcessIdsByName(const wchar_t *name) {
     PROCESSENTRY32 entry = {sizeof(entry)};
     if (Process32First(snapshot, &entry)) {
         do {
-            if (_wcsicmp(entry.szExeFile, name) == 0 ||
-                _wcsnicmp(entry.szExeFile, L"mirrorsedge", 11) == 0) {
+            if (_wcsicmp(entry.szExeFile, name) == 0) {
                 pids.push_back(entry.th32ProcessID);
             }
         } while (Process32Next(snapshot, &entry));

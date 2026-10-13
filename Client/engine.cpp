@@ -48,6 +48,11 @@ static struct {
 } spawns;
 
 static struct {
+    std::vector<Classes::ASkeletalMeshActorSpawnable *> Queue;
+    std::mutex Mutex;
+} despawns;
+
+static struct {
     std::vector<ProcessEventCallback> Callbacks;
     int(__thiscall *Original)(Classes::UObject *, class Classes::UFunction *,
                               void *, void *) = nullptr;
@@ -90,6 +95,79 @@ static struct {
     void(__thiscall *Original)(float *, int, float) = nullptr;
 } tick;
 
+static struct {
+    bool HasConfig = false;
+    bool Fullscreen = false;
+    int Width = 1920;
+    int Height = 540;
+    int AppliedCount = 0;
+    bool NeedsConsoleApply = false;
+    void *Base = nullptr;
+    void *Viewport = nullptr;
+    void(__thiscall *Original)(void *, unsigned int, unsigned int, int, int,
+                               int) = nullptr;
+} viewportResize;
+
+static void ApplyWindowedStyleAndSize(HWND hwnd, int clientWidth,
+                                      int clientHeight) {
+    if (!hwnd || !IsWindow(hwnd)) {
+        return;
+    }
+
+    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+    style &= ~WS_POPUP;
+    style |= (WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+    SetWindowLongW(hwnd, GWL_STYLE, style);
+
+    RECT rc = {0, 0, clientWidth, clientHeight};
+    AdjustWindowRect(&rc, style, FALSE);
+
+    const int winW = rc.right - rc.left;
+    const int winH = rc.bottom - rc.top;
+
+    RECT curRect = {0};
+    GetWindowRect(hwnd, &curRect);
+    int posX = curRect.left;
+    int posY = curRect.top;
+    if (posX < -1000 || posY < -1000 || (posX == 0 && posY == 0)) {
+        const int screenW = GetSystemMetrics(SM_CXSCREEN);
+        const int screenH = GetSystemMetrics(SM_CYSCREEN);
+        posX = (screenW - winW) / 2;
+        posY = (screenH - winH) / 2;
+        if (posY < 0) {
+            posY = 0;
+        }
+    }
+
+    SetWindowPos(hwnd, HWND_NOTOPMOST, posX, posY, winW, winH,
+                 SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+}
+
+void __fastcall ViewportResizeHook(void *this_, void *idle, unsigned int width,
+                                   unsigned int height, int fullscreen,
+                                   int posX, int posY) {
+    viewportResize.Viewport = this_;
+    if (viewportResize.HasConfig) {
+        width = static_cast<unsigned int>(viewportResize.Width);
+        height = static_cast<unsigned int>(viewportResize.Height);
+        fullscreen = viewportResize.Fullscreen ? 1 : 0;
+        viewportResize.AppliedCount++;
+        viewportResize.NeedsConsoleApply = false;
+    }
+
+    viewportResize.Original(this_, width, height, fullscreen, posX, posY);
+
+    if (viewportResize.HasConfig && !viewportResize.Fullscreen) {
+        HWND hwnd =
+            *reinterpret_cast<HWND *>(reinterpret_cast<byte *>(this_) + 0x5C);
+        if (!hwnd) {
+            hwnd = window.Window;
+        }
+        ApplyWindowedStyleAndSize(hwnd, static_cast<int>(width),
+                                  static_cast<int>(height));
+    }
+}
+
 // D3D9 and window hook implementations
 LRESULT CALLBACK WndProcHook(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HRESULT WINAPI EndSceneHook(IDirect3DDevice9 *device) {
@@ -109,6 +187,22 @@ HRESULT WINAPI EndSceneHook(IDirect3DDevice9 *device) {
         window.WndProc = reinterpret_cast<WNDPROC>(
             SetWindowLongPtr(params.hFocusWindow, GWLP_WNDPROC,
                              reinterpret_cast<LONG>(WndProcHook)));
+
+        if (viewportResize.HasConfig) {
+            RECT clientRc = {0};
+            if (GetClientRect(params.hFocusWindow, &clientRc)) {
+                if ((clientRc.right - clientRc.left) != viewportResize.Width ||
+                    (clientRc.bottom - clientRc.top) != viewportResize.Height ||
+                    viewportResize.AppliedCount == 0) {
+                    viewportResize.NeedsConsoleApply = true;
+                }
+            }
+            if (!viewportResize.Fullscreen) {
+                ApplyWindowedStyleAndSize(params.hFocusWindow,
+                                          viewportResize.Width,
+                                          viewportResize.Height);
+            }
+        }
 
         init = false;
     }
@@ -141,11 +235,26 @@ HRESULT WINAPI ResetHook(IDirect3DDevice9 *pDevice,
     ImGui_ImplDX9_Shutdown();
     ImGui_ImplWin32_Shutdown();
 
+    if (viewportResize.HasConfig && params) {
+        params->BackBufferWidth = static_cast<UINT>(viewportResize.Width);
+        params->BackBufferHeight = static_cast<UINT>(viewportResize.Height);
+        params->Windowed = viewportResize.Fullscreen ? FALSE : TRUE;
+        if (params->Windowed) {
+            params->FullScreen_RefreshRateInHz = 0;
+        }
+    }
+
     const auto ret = resetScene.Original(pDevice, params);
 
     window.Window = params->hDeviceWindow;
     ImGui_ImplWin32_Init(params->hDeviceWindow);
     ImGui_ImplDX9_Init(pDevice);
+
+    if (viewportResize.HasConfig && !viewportResize.Fullscreen &&
+        params->hDeviceWindow) {
+        ApplyWindowedStyleAndSize(params->hDeviceWindow, viewportResize.Width,
+                                  viewportResize.Height);
+    }
 
     return ret;
 }
@@ -201,6 +310,18 @@ void HandleMessage(HWND hWnd, UINT &msg, WPARAM wParam, LPARAM lParam) {
 
 LRESULT CALLBACK WndProcHook(HWND hWnd, UINT msg, WPARAM wParam,
                              LPARAM lParam) {
+
+    if (msg == WM_GETMINMAXINFO && viewportResize.HasConfig &&
+        !viewportResize.Fullscreen) {
+        auto mmi = reinterpret_cast<MINMAXINFO *>(lParam);
+        if (mmi) {
+            mmi->ptMaxTrackSize.x = 16384;
+            mmi->ptMaxTrackSize.y = 16384;
+            mmi->ptMaxSize.x = 16384;
+            mmi->ptMaxSize.y = 16384;
+            return 0;
+        }
+    }
 
     if (window.BlockInput &&
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) {
@@ -264,6 +385,11 @@ int __fastcall LevelLoadHook(void *this_, void *idle, void **levelInfo,
     for (const auto &callback : levelLoad.PreCallbacks) {
         callback(levelName);
     }
+
+    despawns.Mutex.lock();
+    despawns.Queue.clear();
+    despawns.Queue.shrink_to_fit();
+    despawns.Mutex.unlock();
 
     spawns.Mutex.lock();
     spawns.Queue.clear();
@@ -514,26 +640,53 @@ SpawnCharacter(Engine::Character character) {
 }
 
 void __fastcall TickHook(float *scales, void *idle, int arg, float delta) {
-    if (Engine::GetPlayerPawn(true)) {
-        // Queues must be executed inside the context of an engine thread in
-        // sync with a tick
-        if (commands.Queue.size() > 0) {
-            auto console = Engine::GetConsole();
+    if (viewportResize.HasConfig && viewportResize.NeedsConsoleApply) {
+        auto console = Engine::GetConsole();
+        if (console) {
+            viewportResize.NeedsConsoleApply = false;
+            wchar_t cmd[64] = {0};
+            swprintf_s(cmd, L"setres %dx%dx32%c", viewportResize.Width,
+                       viewportResize.Height,
+                       viewportResize.Fullscreen ? L'f' : L'w');
+            console->ConsoleCommand(cmd);
+        }
+    }
 
-            if (console) {
-                commands.Mutex.lock();
+    // Console commands (e.g. setres) can run even on the main menu
+    if (commands.Queue.size() > 0) {
+        auto console = Engine::GetConsole();
 
-                for (auto &command : commands.Queue) {
-                    console->ConsoleCommand(command.c_str());
-                }
+        if (console) {
+            commands.Mutex.lock();
 
-                commands.Queue.clear();
-                commands.Queue.shrink_to_fit();
-
-                commands.Mutex.unlock();
+            for (auto &command : commands.Queue) {
+                console->ConsoleCommand(command.c_str());
             }
+
+            commands.Queue.clear();
+            commands.Queue.shrink_to_fit();
+
+            commands.Mutex.unlock();
+        }
+    }
+
+    if (Engine::GetPlayerPawn(true)) {
+        if (despawns.Queue.size() > 0) {
+            despawns.Mutex.lock();
+
+            for (auto *actor : despawns.Queue) {
+                if (actor) {
+                    actor->ShutDown();
+                }
+            }
+
+            despawns.Queue.clear();
+            despawns.Queue.shrink_to_fit();
+
+            despawns.Mutex.unlock();
         }
 
+        // Spawn queue must be executed when a player pawn exists in a level
         if (spawns.Queue.size() > 0) {
             spawns.Mutex.lock();
 
@@ -713,7 +866,9 @@ void Engine::Despawn(Classes::ASkeletalMeshActorSpawnable *actor) {
         return;
     }
 
-    actor->ShutDown();
+    despawns.Mutex.lock();
+    despawns.Queue.push_back(actor);
+    despawns.Mutex.unlock();
 }
 
 void Engine::TransformBones(Character character,
@@ -899,8 +1054,117 @@ void Engine::BlockInput(bool block) {
     ImGui::GetIO().MouseDrawCursor = window.BlockInput = block;
 }
 
+static void *tsAsyncThreadRunOriginal = nullptr;
+void __fastcall TsAsyncThreadRunHook(void *this_, void *) {
+    auto self = reinterpret_cast<byte *>(this_);
+    for (;;) {
+        void *syncEvent = *reinterpret_cast<void **>(self + 0x0C);
+        if (syncEvent) {
+            auto vtable = *reinterpret_cast<void ***>(syncEvent);
+            auto waitFn =
+                reinterpret_cast<int(__thiscall *)(void *, unsigned int)>(
+                    vtable[5]);
+            waitFn(syncEvent, 0xFFFFFFFF);
+        }
+
+        void **taskSlot = *reinterpret_cast<void ***>(self + 0x04);
+        if (taskSlot && *taskSlot) {
+            void *task = *taskSlot;
+            auto taskVtable = *reinterpret_cast<void ***>(task);
+            auto runTaskFn =
+                reinterpret_cast<void(__thiscall *)(void *)>(taskVtable[1]);
+            runTaskFn(task);
+        }
+
+        int *doneFlag = *reinterpret_cast<int **>(self + 0x08);
+        if (doneFlag) {
+            *doneFlag = 1;
+        }
+    }
+}
+
+void Engine::InstallStartupHooks() {
+    if (viewportResize.Original) {
+        return;
+    }
+
+    void *ptr = Pattern::FindPattern(
+        "\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC"
+        "\xCC\x01\x00\x00\x53\x55\x56\x57\xA1\x00\x00\x00\x00\x33\xC4\x50"
+        "\x8D\x84\x24\xE0\x01\x00\x00\x64\xA3\x00\x00\x00\x00\x8B\xF1\x33"
+        "\xDB\x89\x5C\x24\x24\x39\x5E\x7C",
+        "xxx????xx????xxxxxxxxxxxx????xxxxxxxxxxxx????xxxxxxxxxxx");
+
+    if (ptr) {
+        viewportResize.Base = ptr;
+        Hook::TrampolineHook(
+            ViewportResizeHook, ptr,
+            reinterpret_cast<void **>(&viewportResize.Original));
+    }
+
+    // Fix multi-instance crash at 0x01199824:
+    // MirrorsEdge.exe creates a global named event L"TsAsyncWakeUpEvent".
+    // When Instance 2 reaches the main menu and signals TsAsyncWakeUpEvent,
+    // Windows wakes up Instance 1's TsAsyncThread with a null task pointer
+    // (ECX=0). Patch the event creation to pass nullptr (unnamed process-local
+    // event) and guard TsAsyncThread::Run against null task pointers.
+    if ((ptr = Pattern::FindPattern(
+             "\x56\x8B\xF1\x83\x7E\x1C\x00\x0F\x85\x91\x00\x00\x00\x8B\x0D"
+             "\x00\x00\x00\x00\x8B\x01\x8B\x50\x04\x68\x00\x00\x00\x00\x6A"
+             "\x00\xFF\xD2",
+             "xxxxxxxxxxxxxxx????xxxxxx????xxxx"))) {
+        byte *pushEventName = reinterpret_cast<byte *>(ptr) + 24;
+        DWORD oldProtect = 0;
+        if (VirtualProtect(pushEventName, 5, PAGE_EXECUTE_READWRITE,
+                           &oldProtect)) {
+            // Replace `push offset L"TsAsyncWakeUpEvent"` (68 xx xx xx xx)
+            // with `push 0; nop; nop; nop` (6A 00 90 90 90)
+            pushEventName[0] = 0x6A;
+            pushEventName[1] = 0x00;
+            pushEventName[2] = 0x90;
+            pushEventName[3] = 0x90;
+            pushEventName[4] = 0x90;
+            VirtualProtect(pushEventName, 5, oldProtect, &oldProtect);
+        }
+    }
+
+    if (!tsAsyncThreadRunOriginal &&
+        (ptr = Pattern::FindPattern(
+             "\x56\x8B\xF1\x8B\x4E\x0C\x8B\x01\x8B\x50\x14\x6A\xFF\xFF\xD2"
+             "\x8B\x46\x04\x8B\x08\x8B\x11\x8B\x42\x04\xFF\xD0\x8B\x4E\x08"
+             "\xC7\x01\x01\x00\x00\x00\xEB\xDD",
+             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))) {
+        Hook::TrampolineHook(
+            TsAsyncThreadRunHook, ptr,
+            reinterpret_cast<void **>(&tsAsyncThreadRunOriginal));
+    }
+}
+
+void Engine::SetDisplayConfig(bool fullscreen, int width, int height,
+                              bool applyNow) {
+    viewportResize.Fullscreen = fullscreen;
+    viewportResize.Width = width;
+    viewportResize.Height = height;
+    viewportResize.HasConfig = true;
+
+    if (applyNow) {
+        wchar_t cmd[64] = {0};
+        swprintf_s(cmd, L"setres %dx%dx32%c", width, height,
+                   fullscreen ? L'f' : L'w');
+        ExecuteCommand(cmd);
+    }
+}
+
+void Engine::GetDisplayConfig(bool &fullscreen, int &width, int &height) {
+    fullscreen = viewportResize.Fullscreen;
+    width = viewportResize.Width;
+    height = viewportResize.Height;
+}
+
 bool Engine::Initialize() {
     void *ptr = nullptr;
+
+    InstallStartupHooks();
 
     // GNames
     if (!(ptr = Pattern::FindPattern("\x8B\x0D\x00\x00\x00\x00\x8B\x84\x24\x00"
@@ -926,6 +1190,10 @@ bool Engine::Initialize() {
     Classes::UObject::GObjects =
         reinterpret_cast<decltype(Classes::UObject::GObjects)>(
             *reinterpret_cast<void **>(reinterpret_cast<byte *>(ptr) + 2));
+
+    while (!Classes::FName::GNames->Num() || !Classes::UObject::GObjects->Num()) {
+        Sleep(50);
+    }
 
     // LoadLibraryA
     Hook::TrampolineHook(LoadLibraryAHook, LoadLibraryA,

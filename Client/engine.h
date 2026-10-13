@@ -81,6 +81,9 @@ void OnInput(InputCallback callback);
 void OnSuperInput(InputCallback callback);
 
 void BlockInput(bool block);
+void InstallStartupHooks();
+void SetDisplayConfig(bool fullscreen, int width, int height, bool applyNow = false);
+void GetDisplayConfig(bool &fullscreen, int &width, int &height);
 bool Initialize();
 
 } // namespace Engine

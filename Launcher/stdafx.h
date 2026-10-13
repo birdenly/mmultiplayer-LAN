@@ -15,6 +15,6 @@ bool LoadClient(HANDLE process);
 HANDLE CreateDialogThread();
 bool HasModule(HANDLE process, const wchar_t *module);
 bool HasClientModule(HANDLE process);
-bool GetDllPath(DWORD pid, std::wstring &path);
+bool GetDllPath(std::wstring &path);
 std::vector<DWORD> GetProcessIdsByName(const wchar_t *name);
 bool AdjustCurrentPrivilege(const wchar_t *privilege);
