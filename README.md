@@ -92,7 +92,7 @@ Open PowerShell in the repository root and run:
 *(Adjust the `MSBuild.exe` path if you are using VS 2019/2022 Professional or Enterprise).*
 
 ### Option 2: Build via Visual Studio IDE
-1. Open `mmultiplayer.sln` in Visual Studio.
-2. Set the solution configuration to **`Release`** and platform to **`x86` (`Win32`)**.
+1. Open `Client\Client.vcxproj` in Visual Studio.
+2. Set the configuration to **`Release`** and platform to **`x86` (`Win32`)**.
 3. Right-click the **`Client`** project and click **Build**.
 4. Grab `Client\Release\Client.dll` and rename it to `mmultiplayer.asi` (or copy it from `output\mmultiplayer.asi`).
