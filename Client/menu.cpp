@@ -152,9 +152,14 @@ static void EngineTab() {
 	ImGui::InputInt("Height##res-h", &resHeight, 0);
 	ImGui::PopItemWidth();
 
-	if (resWidth < 320) resWidth = 320;
-	if (resHeight < 200) resHeight = 200;
+	if (resWidth != 0 && resWidth < 320) resWidth = 320;
+	if (resHeight != 0 && resHeight < 200) resHeight = 200;
 
+	if (ImGui::Button("0x0 (Monitor)")) {
+		resWidth = 0;
+		resHeight = 0;
+	}
+	ImGui::SameLine();
 	if (ImGui::Button("1920x540")) {
 		resWidth = 1920;
 		resHeight = 540;

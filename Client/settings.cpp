@@ -62,7 +62,7 @@ static void InitDefaults() {
 
 	settings["display"] = {
 		{ "fullscreen", 0 },
-		{ "res", "1920x540" },
+		{ "res", "0x0" },
 	};
 
 	settings["client"] = {
@@ -157,9 +157,14 @@ bool Settings::LoadDisplayConfig(bool &fullscreen, int &width, int &height) {
 		Settings::Load();
 	}
 
+	int monitorW = GetSystemMetrics(SM_CXSCREEN);
+	int monitorH = GetSystemMetrics(SM_CYSCREEN);
+	if (monitorW < 320) monitorW = 1920;
+	if (monitorH < 200) monitorH = 1080;
+
 	fullscreen = false;
-	width = 1920;
-	height = 540;
+	width = monitorW;
+	height = monitorH;
 
 	if (settings["display"].is_object()) {
 		const auto &fsVal = settings["display"]["fullscreen"];
@@ -173,9 +178,9 @@ bool Settings::LoadDisplayConfig(bool &fullscreen, int &width, int &height) {
 		if (resVal.is_string()) {
 			const auto resStr = ToLowerAscii(resVal.get<std::string>());
 			int w = 0, h = 0;
-			if (sscanf_s(resStr.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200) {
-				width = w;
-				height = h;
+			if (sscanf_s(resStr.c_str(), "%dx%d", &w, &h) == 2) {
+				width = (w <= 0) ? monitorW : (w < 320 ? 320 : w);
+				height = (h <= 0) ? monitorH : (h < 200 ? 200 : h);
 			}
 		}
 	}

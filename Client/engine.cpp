@@ -1142,6 +1142,15 @@ void Engine::InstallStartupHooks() {
 
 void Engine::SetDisplayConfig(bool fullscreen, int width, int height,
                               bool applyNow) {
+    if (width <= 0) {
+        width = GetSystemMetrics(SM_CXSCREEN);
+        if (width < 320) width = 1920;
+    }
+    if (height <= 0) {
+        height = GetSystemMetrics(SM_CYSCREEN);
+        if (height < 200) height = 1080;
+    }
+
     viewportResize.Fullscreen = fullscreen;
     viewportResize.Width = width;
     viewportResize.Height = height;
