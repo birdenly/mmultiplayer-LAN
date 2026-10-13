@@ -355,3 +355,7 @@ MigrationBackup/
 output/Client.dll
 output/Launcher.exe
 output/mmultiplayer.dll
+Client/binary/Client.dll
+Client/binary/Client.dll
+output/mmultiplayer.asi
+output/mmultiplayer.cfg
