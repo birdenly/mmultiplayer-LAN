@@ -56,7 +56,6 @@ static DWORD WINAPI InitializeModThread(LPVOID) {
 	}
 
 	Debug::Initialize();
-	Settings::Load();
 
 	Addon *addons[] = { new Client(), new Trainer(), new Dolly() };
 

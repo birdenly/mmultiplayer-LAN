@@ -1,14 +1,17 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <Windows.h>
 
 #include "settings.h"
 
 static json settings;
 static HMODULE g_Module = nullptr;
+static bool g_Loaded = false;
 
 static std::string TrimString(const std::string &str) {
 	const auto first = str.find_first_not_of(" \t\r\n");
@@ -24,18 +27,6 @@ static std::string ToLowerAscii(std::string str) {
 		return static_cast<char>(std::tolower(c));
 	});
 	return str;
-}
-
-static std::string GetModuleDirectory() {
-	char path[MAX_PATH] = { 0 };
-	if (GetModuleFileNameA(g_Module, path, MAX_PATH)) {
-		std::string fullPath(path);
-		const auto pos = fullPath.find_last_of("\\/");
-		if (pos != std::string::npos) {
-			return fullPath.substr(0, pos + 1);
-		}
-	}
-	return "";
 }
 
 static std::string GetConfigPath() {
@@ -66,8 +57,95 @@ static std::string GetConfigPath() {
 	return "mmultiplayer.cfg";
 }
 
-static std::string GetSettingsPath() {
-	return GetModuleDirectory() + "mmultiplayer.settings";
+static void InitDefaults() {
+	settings = json::object();
+
+	settings["display"] = {
+		{ "fullscreen", 0 },
+		{ "res", "1920x540" },
+	};
+
+	settings["client"] = {
+		{ "character", 0 },
+		{ "chatKeybind", 84 },
+		{ "disabled", false },
+		{ "name", "anonymous" },
+		{ "peerIp", "" },
+		{ "room", "lobby" },
+		{ "showChatOverlay", true },
+		{ "showNameTags", true },
+	};
+
+	settings["menu"] = {
+		{ "showKeybind", 45 },
+	};
+
+	settings["player"] = {
+		{ "showInfo", false },
+	};
+
+	settings["trainer"] = {
+		{ "beamerKeybind", 84 },
+		{ "enabled", false },
+		{ "flyDownKeybind", 16 },
+		{ "flyFasterKeybind", 69 },
+		{ "flyKeybind", 50 },
+		{ "flySlowerKeybind", 81 },
+		{ "flyUpKeybind", 32 },
+		{ "godKeybind", 49 },
+		{ "kgKeybind", 69 },
+		{ "loadKeybind", 53 },
+		{ "overlay", true },
+		{ "saveKeybind", 52 },
+		{ "strangKeybind", 82 },
+	};
+}
+
+static bool ParseBoolValue(const std::string &raw, bool fallback) {
+	const auto lower = ToLowerAscii(TrimString(raw));
+	if (lower == "1" || lower == "true" || lower == "yes" || lower == "on") {
+		return true;
+	}
+	if (lower == "0" || lower == "false" || lower == "no" || lower == "off") {
+		return false;
+	}
+	return fallback;
+}
+
+static int ParseIntValue(const std::string &raw, int fallback) {
+	const auto trimmed = TrimString(raw);
+	if (trimmed.empty()) {
+		return fallback;
+	}
+	const auto lower = ToLowerAscii(trimmed);
+	if (lower == "true" || lower == "yes" || lower == "on") {
+		return 1;
+	}
+	if (lower == "false" || lower == "no" || lower == "off") {
+		return 0;
+	}
+	char *endPtr = nullptr;
+	const long parsed = std::strtol(trimmed.c_str(), &endPtr, 0);
+	if (endPtr == trimmed.c_str()) {
+		return fallback;
+	}
+	return static_cast<int>(parsed);
+}
+
+static std::string ResolveCanonicalKey(const json &sectionObj, const std::string &rawKey) {
+	if (!sectionObj.is_object()) {
+		return rawKey;
+	}
+	const auto lowerKey = ToLowerAscii(rawKey);
+	if (sectionObj.find("res") != sectionObj.end() && lowerKey == "resolution") {
+		return "res";
+	}
+	for (auto it = sectionObj.begin(); it != sectionObj.end(); ++it) {
+		if (ToLowerAscii(it.key()) == lowerKey) {
+			return it.key();
+		}
+	}
+	return rawKey;
 }
 
 void Settings::SetModule(HMODULE module) {
@@ -75,62 +153,56 @@ void Settings::SetModule(HMODULE module) {
 }
 
 bool Settings::LoadDisplayConfig(bool &fullscreen, int &width, int &height) {
+	if (!g_Loaded) {
+		Settings::Load();
+	}
+
 	fullscreen = false;
 	width = 1920;
 	height = 540;
 
-	const auto cfgPath = GetConfigPath();
-	std::ifstream file(cfgPath);
-	if (!file.good()) {
-		SaveDisplayConfig(fullscreen, width, height);
-		return true;
-	}
-
-	bool foundAny = false;
-	std::string line;
-	while (std::getline(file, line)) {
-		line = TrimString(line);
-		if (line.empty() || line[0] == '#' || line[0] == ';' || line[0] == '[') {
-			continue;
+	if (settings["display"].is_object()) {
+		const auto &fsVal = settings["display"]["fullscreen"];
+		if (fsVal.is_boolean()) {
+			fullscreen = fsVal.get<bool>();
+		} else if (fsVal.is_number_integer()) {
+			fullscreen = (fsVal.get<int>() != 0);
 		}
 
-		const auto eq = line.find('=');
-		if (eq == std::string::npos) {
-			continue;
-		}
-
-		const auto key = ToLowerAscii(TrimString(line.substr(0, eq)));
-		const auto val = ToLowerAscii(TrimString(line.substr(eq + 1)));
-
-		if (key == "fullscreen") {
-			fullscreen = (val == "1" || val == "true" || val == "yes");
-			foundAny = true;
-		} else if (key == "res" || key == "resolution") {
+		const auto &resVal = settings["display"]["res"];
+		if (resVal.is_string()) {
+			const auto resStr = ToLowerAscii(resVal.get<std::string>());
 			int w = 0, h = 0;
-			if (sscanf_s(val.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200) {
+			if (sscanf_s(resStr.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200) {
 				width = w;
 				height = h;
-				foundAny = true;
 			}
 		}
 	}
 
-	return foundAny;
+	return true;
 }
 
 void Settings::SaveDisplayConfig(bool fullscreen, int width, int height) {
-	const auto cfgPath = GetConfigPath();
-	std::ofstream file(cfgPath, std::ios::out | std::ios::trunc);
-	if (!file) {
-		return;
+	if (!g_Loaded) {
+		Settings::Load();
 	}
 
-	file << "fullscreen=" << (fullscreen ? 1 : 0) << "\n";
-	file << "res=" << width << "x" << height << "\n";
+	if (!settings["display"].is_object()) {
+		settings["display"] = json::object();
+	}
+
+	settings["display"]["fullscreen"] = fullscreen ? 1 : 0;
+	settings["display"]["res"] = std::to_string(width) + "x" + std::to_string(height);
+	Settings::Save();
 }
 
 void Settings::SetSetting(const char *menu, const char *key, json value) {
-	if (settings[menu].is_null()) {
+	if (!g_Loaded) {
+		Settings::Load();
+	}
+
+	if (!settings[menu].is_object()) {
 		settings[menu] = json::object();
 	}
 
@@ -139,7 +211,11 @@ void Settings::SetSetting(const char *menu, const char *key, json value) {
 }
 
 json Settings::GetSetting(const char *menu, const char *key, json defaultValue) {
-	if (settings[menu].is_null()) {
+	if (!g_Loaded) {
+		Settings::Load();
+	}
+
+	if (!settings[menu].is_object()) {
 		settings[menu] = json::object();
 	}
 
@@ -153,36 +229,134 @@ json Settings::GetSetting(const char *menu, const char *key, json defaultValue) 
 }
 
 void Settings::Load() {
-	auto reset = true;
+	InitDefaults();
+	g_Loaded = true;
 
-	std::ifstream f(GetSettingsPath());
-	if (f.good()) {
-		try {
-			settings = json::parse(f);
-			reset = false;
-		} catch (json::parse_error &) {}
-
-		f.close();
+	const auto cfgPath = GetConfigPath();
+	std::ifstream file(cfgPath);
+	if (!file.good()) {
+		Settings::Save();
+		return;
 	}
 
-	if (reset) {
-		Reset();
+	std::string currentSection = "display";
+	std::string line;
+	while (std::getline(file, line)) {
+		line = TrimString(line);
+		if (line.empty() || line[0] == '#' || line[0] == ';') {
+			continue;
+		}
+
+		if (line.front() == '[' && line.back() == ']' && line.size() > 2) {
+			currentSection = ToLowerAscii(TrimString(line.substr(1, line.size() - 2)));
+			if (!settings[currentSection].is_object()) {
+				settings[currentSection] = json::object();
+			}
+			continue;
+		}
+
+		const auto eq = line.find('=');
+		if (eq == std::string::npos) {
+			continue;
+		}
+
+		const auto rawKey = TrimString(line.substr(0, eq));
+		const auto rawVal = TrimString(line.substr(eq + 1));
+		if (rawKey.empty()) {
+			continue;
+		}
+
+		auto &secObj = settings[currentSection];
+		const auto canonicalKey = ResolveCanonicalKey(secObj, rawKey);
+		auto &existing = secObj[canonicalKey];
+
+		if (existing.is_boolean()) {
+			existing = ParseBoolValue(rawVal, existing.get<bool>());
+		} else if (existing.is_number_integer()) {
+			existing = ParseIntValue(rawVal, existing.get<int>());
+		} else if (existing.is_string()) {
+			existing = rawVal;
+		} else {
+			const auto lowerVal = ToLowerAscii(rawVal);
+			if (lowerVal == "true" || lowerVal == "false") {
+				existing = (lowerVal == "true");
+			} else {
+				char *endPtr = nullptr;
+				const long parsed = std::strtol(rawVal.c_str(), &endPtr, 0);
+				if (!rawVal.empty() && endPtr && *endPtr == '\0') {
+					existing = static_cast<int>(parsed);
+				} else {
+					existing = rawVal;
+				}
+			}
+		}
 	}
+
+	file.close();
+	Settings::Save();
 }
 
 void Settings::Reset() {
-	settings = json::object();
+	InitDefaults();
+	g_Loaded = true;
 	Settings::Save();
 }
 
 void Settings::Save() {
-	std::ofstream file(GetSettingsPath(), std::ios::out);
+	const auto cfgPath = GetConfigPath();
+	std::ofstream file(cfgPath, std::ios::out | std::ios::trunc);
 	if (!file) {
-		printf("settings: failed to save %s\n", GetSettingsPath().c_str());
+		printf("settings: failed to save %s\n", cfgPath.c_str());
 		return;
 	}
 
-	auto dump = settings.dump();
-	file.write(dump.c_str(), dump.size());
+	const std::vector<std::string> sectionOrder = {
+		"display",
+		"client",
+		"menu",
+		"player",
+		"trainer",
+	};
+
+	auto writeSection = [&](const std::string &secName, const json &secObj, bool &firstSection) {
+		if (!secObj.is_object() || secObj.empty()) {
+			return;
+		}
+
+		if (!firstSection) {
+			file << "\n";
+		}
+		firstSection = false;
+
+		file << "[" << secName << "]\n";
+		for (auto it = secObj.begin(); it != secObj.end(); ++it) {
+			file << it.key() << "=";
+			const auto &val = it.value();
+			if (val.is_boolean()) {
+				file << (val.get<bool>() ? "true" : "false");
+			} else if (val.is_number_integer()) {
+				file << val.get<int>();
+			} else if (val.is_number()) {
+				file << val.get<double>();
+			} else if (val.is_string()) {
+				file << val.get<std::string>();
+			}
+			file << "\n";
+		}
+	};
+
+	bool firstSection = true;
+	for (const auto &secName : sectionOrder) {
+		if (settings.find(secName) != settings.end()) {
+			writeSection(secName, settings[secName], firstSection);
+		}
+	}
+
+	for (auto it = settings.begin(); it != settings.end(); ++it) {
+		if (std::find(sectionOrder.begin(), sectionOrder.end(), it.key()) == sectionOrder.end()) {
+			writeSection(it.key(), it.value(), firstSection);
+		}
+	}
+
 	file.close();
 }
