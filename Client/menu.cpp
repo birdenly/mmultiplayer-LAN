@@ -133,62 +133,6 @@ static void EngineTab() {
 	if (ImGui::Button("Debug Console##client-show-console")) {
 		Debug::CreateConsole();
 	}
-
-	ImGui::Separator();
-	ImGui::Text("Display / Window Mode (.cfg)");
-
-	static bool cfgInitialized = false;
-	static int resWidth = 1920;
-	static int resHeight = 540;
-	if (!cfgInitialized) {
-		bool fs = false;
-		Engine::GetDisplayConfig(fs, resWidth, resHeight);
-		cfgInitialized = true;
-	}
-
-	ImGui::PushItemWidth(100.0f);
-	ImGui::InputInt("Width##res-w", &resWidth, 0);
-	ImGui::SameLine();
-	ImGui::InputInt("Height##res-h", &resHeight, 0);
-	ImGui::PopItemWidth();
-
-	if (resWidth != 0 && resWidth < 320) resWidth = 320;
-	if (resHeight != 0 && resHeight < 200) resHeight = 200;
-
-	if (ImGui::Button("0x0 (Monitor)")) {
-		resWidth = 0;
-		resHeight = 0;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("1920x540")) {
-		resWidth = 1920;
-		resHeight = 540;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("960x540")) {
-		resWidth = 960;
-		resHeight = 540;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("1280x720")) {
-		resWidth = 1280;
-		resHeight = 720;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("1920x1080")) {
-		resWidth = 1920;
-		resHeight = 1080;
-	}
-
-	if (ImGui::Button("Apply Windowed##apply-windowed")) {
-		Engine::SetDisplayConfig(false, resWidth, resHeight, true);
-		Settings::SaveDisplayConfig(false, resWidth, resHeight);
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Apply Fullscreen##apply-fullscreen")) {
-		Engine::SetDisplayConfig(true, resWidth, resHeight, true);
-		Settings::SaveDisplayConfig(true, resWidth, resHeight);
-	}
 }
 
 static void WorldTab() {
