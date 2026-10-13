@@ -1,7 +1,14 @@
 #pragma once
 
 #include <d3d9.h>
-#include <d3dx9.h>
+
+typedef D3DMATRIX D3DXMATRIX;
+
+typedef struct D3DXVECTOR4 {
+    FLOAT x, y, z, w;
+    D3DXVECTOR4() = default;
+    D3DXVECTOR4(FLOAT x, FLOAT y, FLOAT z, FLOAT w) : x(x), y(y), z(z), w(w) {}
+} D3DXVECTOR4;
 
 #pragma comment(lib, "d3d9.lib")
 

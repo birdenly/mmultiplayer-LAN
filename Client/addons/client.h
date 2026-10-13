@@ -67,5 +67,9 @@ class Client : public Addon {
         Classes::ASkeletalMeshActorSpawnable *Actor;
         float MaxZ;
         PACKET LastPacket;
+        unsigned long Ip;
+        unsigned short Port;
+        unsigned long long LastSeen;
+        unsigned int LastChatSeq;
     };
 };
